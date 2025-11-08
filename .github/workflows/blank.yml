@@ -1,4 +1,4 @@
-name: Build Installer (WeChat Image Optimizer + GPT)
+name: Build Installer + Portable ZIP (WeChat Image Optimizer + GPT)
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  build_windows_installer:
+  build_windows:
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -17,8 +17,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          mkdir -p app
-          cd app
+          mkdir -p app && cd app
 
           # package.json
           printf '{\n' > package.json
@@ -39,73 +38,80 @@ jobs:
           printf '}\n' >> package.json
 
           # main.js
-          printf "const { app, BrowserWindow, ipcMain } = require('electron');\n" > main.js
-          printf "const path = require('path');\nconst fs = require('fs');\nconst sharp = require('sharp');\n" >> main.js
-          printf "const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');\n" >> main.js
-          printf "function loadSettings(){ try { return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8')); } catch { return { openaiKey: process.env.OPENAI_API_KEY || '', outW:1200,outH:1200,pad:40 }; } }\n" >> main.js
-          printf "function saveSettings(obj){ fs.writeFileSync(SETTINGS_PATH, JSON.stringify(obj, null, 2)); }\n" >> main.js
-          printf "function createWindow(){ const win=new BrowserWindow({ width:980,height:740,webPreferences:{ preload:path.join(__dirname,'preload.js') } }); win.loadFile('index.html'); }\n" >> main.js
-          printf "app.whenReady().then(()=>{ createWindow(); app.on('activate',()=>{ if(BrowserWindow.getAllWindows().length===0) createWindow(); }); });\n" >> main.js
-          printf "app.on('window-all-closed',()=>{ if(process.platform!=='darwin') app.quit(); });\n" >> main.js
-          printf "ipcMain.handle('process-images', async (_evt, files, opts)=>{\n" >> main.js
-          printf "  const s=loadSettings(); const outW=Number(opts?.outW||s.outW||1200), outH=Number(opts?.outH||s.outH||1200), pad=Number(opts?.pad||s.pad||40);\n" >> main.js
-          printf "  const bg=opts?.background||'#FFFFFF', ac=!!opts?.autocontrast, sh=Math.max(0,Math.min(Number(opts?.sharpen||1),2)); const badge=opts?.badge||{enable:false};\n" >> main.js
-          printf "  const outDir=path.join(process.cwd(),'outputs'); if(!fs.existsSync(outDir)) fs.mkdirSync(outDir,{recursive:true});\n" >> main.js
-          printf "  const results=[]; for(const f of files){ try{\n" >> main.js
-          printf "    let img=sharp(f,{failOn:false}).rotate().resize({ width:Math.max(1,outW-pad*2), height:Math.max(1,outH-pad*2), fit:'inside', withoutEnlargement:true });\n" >> main.js
-          printf "    if(ac) img=img.normalize(); if(sh>0) img=img.sharpen(sh);\n" >> main.js
-          printf "    const canvas=sharp({ create:{ width:outW, height:outH, channels:4, background:{r:255,g:255,b:255,alpha:1} } });\n" >> main.js
-          printf "    const buf=await img.png().toBuffer(); const meta=await sharp(buf).metadata();\n" >> main.js
-          printf "    const left=Math.floor((outW-(meta.width||0))/2), top=Math.floor((outH-(meta.height||0))/2);\n" >> main.js
-          printf "    let composed=await canvas.composite([{ input: buf, left, top }]).png().toBuffer();\n" >> main.js
-          printf "    if(bg && bg!=='keep'){ const hex=bg.replace('#',''); const rgb={ r:parseInt(hex.slice(0,2)||'ff',16), g:parseInt(hex.slice(2,4)||'ff',16), b:parseInt(hex.slice(4,6)||'ff',16) }; composed=await sharp(composed).flatten({ background: rgb }).toBuffer(); }\n" >> main.js
-          printf "    if(badge.enable && badge.text){ const svg=makeBadgeSVG(badge.text, Number(badge.fontSize)||44, badge.fill||'#FFFF00', badge.textColor||'#141414'); const bImg=sharp(Buffer.from(svg)).png(); const bMeta=await bImg.metadata(); let bx=24, by=24; if(badge.position==='top-right'){bx=outW-(bMeta.width||0)-24;by=24;} if(badge.position==='bottom-left'){bx=24;by=outH-(bMeta.height||0)-24;} if(badge.position==='bottom-right'){bx=outW-(bMeta.width||0)-24;by=outH-(bMeta.height||0)-24;} composed=await sharp(composed).composite([{ input: await bImg.toBuffer(), left: bx, top: by }]).toBuffer(); }\n" >> main.js
-          printf "    const outName=path.basename(f).replace(/\\.(png|jpe?g|webp|gif|bmp|tiff)$/i,''); const outPath=path.join(outDir,`${outName}_optimized_${outW}x${outH}.jpg`);\n" >> main.js
-          printf "    await sharp(composed).jpeg({quality:92}).toFile(outPath); results.push({ input:f, output:outPath, previewB64: fs.readFileSync(outPath,'base64') });\n" >> main.js
-          printf "  }catch(err){ results.push({ input:f, error:String(err) }); } }\n" >> main.js
-          printf "  return results;\n});\n" >> main.js
-          printf "function makeBadgeSVG(text,fontSize=44,fill='#FFFF00',color='#141414'){ const padX=18,padY=10,radius=14; const tw=Math.ceil(text.length*fontSize*0.6); const bw=tw+padX*2,bh=fontSize+padY*2; return `<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"${bw}\\" height=\\"${bh}\\"><rect x=\\"0\\" y=\\"0\\" rx=\\"${radius}\\" ry=\\"${radius}\\" width=\\"${bw}\\" height=\\"${bh}\\" fill=\\"${fill}\\"/><text x=\\"${padX}\\" y=\\"${bh-padY-4}\\" fill=\\"${color}\\" font-family=\\"system-ui,Arial\\" font-size=\\"${fontSize}\\">${text}</text></svg>`; }\n" >> main.js
-          printf "ipcMain.handle('generate-gpt', async (_evt, payload)=>{\n" >> main.js
-          printf "  try{ const s=loadSettings(); const apiKey=payload?.openaiKey||s.openaiKey||process.env.OPENAI_API_KEY||''; if(!apiKey) throw new Error('OpenAI API key is required'); const OpenAI=(await import('openai')).default; const client=new OpenAI({ apiKey }); const {brand='',material='',spec='',shape='',use=''}=payload||{}; const sys='你是淘宝文案专家，必须规避极限词、夸大承诺，标题≤60字。'; const user=`品牌：${brand}；材质：${material}；规格：${spec}；形状：${shape}；适用：${use}。\\n请输出 JSON：{ \\"title\\": \\"...\\", \\"bullets\\": [\\"...\\",\\"...\\",\\"...\\",\\"...\\",\\"...\\"], \\"badge_text\\": \\"...\\" }`; const r=await client.responses.create({ model:'gpt-4o-mini', input:[{role:'system',content:sys},{role:'user',content:user}] }); const text=(r.output_text||'').trim().replace(/^```(json)?|```$/g,''); let data={}; try{ data=JSON.parse(text); }catch{ data={}; } if(payload?.rememberKey && payload.openaiKey){ saveSettings({ ...s, openaiKey: payload.openaiKey }); } return { ok:true, title:data.title||`${brand} ${material} ${spec} ${shape} DIY饰品配件`, bullets:Array.isArray(data.bullets)?data.bullets.slice(0,5):['多规格可选','白底突出主体','适用于多场景','日常手作/备货','发货及时'], badge_text:data.badge_text||'多规格可选' }; }catch(e){ return { ok:false, error:String(e) }; }\n});\n" >> main.js
+          cat > main.js <<'JS'
+const { app, BrowserWindow, ipcMain } = require("electron");
+const path = require("path"); const fs = require("fs"); const sharp = require("sharp");
+const SETTINGS_PATH = path.join(app.getPath("userData"), "settings.json");
+function loadSettings(){ try{ return JSON.parse(fs.readFileSync(SETTINGS_PATH,"utf-8")); }catch{ return { openaiKey: process.env.OPENAI_API_KEY || "", outW:1200,outH:1200,pad:40 }; } }
+function saveSettings(obj){ fs.writeFileSync(SETTINGS_PATH, JSON.stringify(obj,null,2)); }
+function createWindow(){ const win=new BrowserWindow({ width:980,height:740,webPreferences:{ preload:path.join(__dirname,"preload.js") } }); win.loadFile("index.html"); }
+app.whenReady().then(()=>{ createWindow(); app.on("activate",()=>{ if(BrowserWindow.getAllWindows().length===0) createWindow(); }); });
+app.on("window-all-closed",()=>{ if(process.platform!=="darwin") app.quit(); });
+
+ipcMain.handle("process-images", async (_evt, files, opts)=>{
+  const s=loadSettings(); const outW=Number(opts?.outW||s.outW||1200), outH=Number(opts?.outH||s.outH||1200), pad=Number(opts?.pad||s.pad||40);
+  const bg=opts?.background||"#FFFFFF", ac=!!opts?.autocontrast, sh=Math.max(0,Math.min(Number(opts?.sharpen||1),2));
+  const badge=opts?.badge||{enable:false}; const outDir=path.join(process.cwd(),"outputs"); if(!fs.existsSync(outDir)) fs.mkdirSync(outDir,{recursive:true});
+  const results=[]; for(const f of files){ try{
+    let img=sharp(f,{failOn:false}).rotate().resize({ width:Math.max(1,outW-pad*2), height:Math.max(1,outH-pad*2), fit:"inside", withoutEnlargement:true });
+    if(ac) img=img.normalize(); if(sh>0) img=img.sharpen(sh);
+    const canvas=sharp({ create:{ width:outW,height:outH,channels:4,background:{r:255,g:255,b:255,alpha:1} } });
+    const buf=await img.png().toBuffer(); const m=await sharp(buf).metadata();
+    const left=Math.floor((outW-(m.width||0))/2), top=Math.floor((outH-(m.height||0))/2);
+    let composed=await canvas.composite([{ input:buf, left, top }]).png().toBuffer();
+    if(bg && bg!=="keep"){ const hex=bg.replace("#",""); const rgb={ r:parseInt(hex.slice(0,2)||"ff",16), g:parseInt(hex.slice(2,4)||"ff",16), b:parseInt(hex.slice(4,6)||"ff",16) }; composed=await sharp(composed).flatten({ background: rgb }).toBuffer(); }
+    if(badge.enable && badge.text){
+      const svg = makeBadgeSVG(badge.text, Number(badge.fontSize)||44, badge.fill||"#FFFF00", badge.textColor||"#141414");
+      const bImg=sharp(Buffer.from(svg)).png(); const bMeta=await bImg.metadata();
+      let bx=24,by=24; if(badge.position==="top-right"){bx=outW-(bMeta.width||0)-24;by=24;} if(badge.position==="bottom-left"){bx=24;by=outH-(bMeta.height||0)-24;} if(badge.position==="bottom-right"){bx=outW-(bMeta.width||0)-24;by=outH-(bMeta.height||0)-24;}
+      composed=await sharp(composed).composite([{ input: await bImg.toBuffer(), left: bx, top: by }]).toBuffer();
+    }
+    const outName=path.basename(f).replace(/\.(png|jpe?g|webp|gif|bmp|tiff)$/i,""); const outPath=path.join(outDir, `${outName}_optimized_${outW}x${outH}.jpg`);
+    await sharp(composed).jpeg({quality:92}).toFile(outPath);
+    results.push({ input:f, output:outPath, previewB64: fs.readFileSync(outPath,"base64") });
+  }catch(err){ results.push({ input:f, error:String(err) }); } }
+  return results;
+});
+function makeBadgeSVG(text, fontSize=44, fill="#FFFF00", color="#141414"){
+  const padX=18,padY=10,r=14; const tw=Math.ceil(text.length*fontSize*0.6); const bw=tw+padX*2,bh=fontSize+padY*2;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${bw}" height="${bh}"><rect x="0" y="0" rx="${r}" ry="${r}" width="${bw}" height="${bh}" fill="${fill}"/><text x="${padX}" y="${bh-padY-4}" fill="${color}" font-family="system-ui,Arial" font-size="${fontSize}">${text}</text></svg>`;
+}
+ipcMain.handle("generate-gpt", async (_evt, payload)=>{
+  try{
+    const s=loadSettings(); const apiKey=payload?.openaiKey||s.openaiKey||process.env.OPENAI_API_KEY||""; if(!apiKey) throw new Error("请先填写 OpenAI API Key");
+    const OpenAI=(await import("openai")).default; const client=new OpenAI({ apiKey });
+    const {brand="",material="",spec="",shape="",use=""}=payload||{};
+    const sys="你是淘宝文案专家，避免极限词，标题≤60字。";
+    const user=`品牌：${brand}；材质：${material}；规格：${spec}；形状：${shape}；适用：${use}。请输出 JSON：{ "title": "...", "bullets": ["...","...","...","...","..."], "badge_text": "..." }`;
+    const r=await client.responses.create({ model:"gpt-4o-mini", input:[{role:"system",content:sys},{role:"user",content:user}] });
+    const text=(r.output_text||"").trim().replace(/^```(json)?|```$/g,""); let data={}; try{ data=JSON.parse(text); }catch{ data={}; }
+    if(payload?.rememberKey && payload.openaiKey){ saveSettings({ ...s, openaiKey: payload.openaiKey }); }
+    return { ok:true, title:data.title||`${brand} ${material} ${spec} ${shape} DIY饰品配件`, bullets:Array.isArray(data.bullets)?data.bullets.slice(0,5):["多规格可选","白底突出主体","多场景适用","手作/备货皆宜","发货及时"], badge_text:data.badge_text||"多规格可选" };
+  }catch(e){ return { ok:false, error:String(e) }; }
+});
+JS
 
           # preload.js
-          printf "const { contextBridge, ipcRenderer } = require('electron');\ncontextBridge.exposeInMainWorld('api',{ processImages:(files,opts)=>ipcRenderer.invoke('process-images',files,opts), generateGPT:(p)=>ipcRenderer.invoke('generate-gpt',p) });\n" > preload.js
+          cat > preload.js <<'JS'
+const { contextBridge, ipcRenderer } = require("electron");
+contextBridge.exposeInMainWorld("api", {
+  processImages: (files, opts) => ipcRenderer.invoke("process-images", files, opts),
+  generateGPT:  (payload)     => ipcRenderer.invoke("generate-gpt", payload)
+});
+JS
 
           # renderer.js
-          printf "const $=(s)=>document.querySelector(s); let files=[]; function getOpts(){ return { outW:parseInt($('#outW').value||'1200',10), outH:parseInt($('#outH').value||'1200',10), pad:parseInt($('#pad').value||'40',10), background:$('#bgKeep').checked?'keep':($('#bgColor').value||'#FFFFFF'), autocontrast:$('#autocontrast').checked, sharpen:parseInt($('#sharpen').value||'1',10), badge:{ enable:$('#badgeEnable').checked, text:$('#badgeText').value||'', position:$('#badgePos').value||'top-left', fontSize:parseInt($('#badgeFont').value||'44',10), fill:'#FFFF00', textColor:'#141414' } }; }\n" > renderer.js
-          printf "function addFiles(list){ for(const f of list){ if(/\\.(png|jpe?g|webp|gif|bmp|tiff)$/i.test(f.path||f.name)){ files.push(f.path||f.name); const li=document.createElement('li'); li.textContent=f.path||f.name; $('#fileList').appendChild(li); } } $('#count').textContent=files.length; }\n" >> renderer.js
-          printf "window.addEventListener('DOMContentLoaded',()=>{ const drop=$('#drop'); drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('hover');}); drop.addEventListener('dragleave',()=>drop.classList.remove('hover')); drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('hover'); addFiles(e.dataTransfer.files);}); $('#pick').addEventListener('change',e=>addFiles(e.target.files)); $('#run').addEventListener('click',async()=>{ if(!files.length){alert('请先拖入或选择图片');return;} $('#run').disabled=true; $('#log').textContent='处理中...'; const res=await window.api.processImages(files,getOpts()); $('#previews').innerHTML=''; res.forEach(r=>{ const card=document.createElement('div'); card.style.border='1px solid #eee'; card.style.borderRadius='12px'; card.style.padding='8px'; card.style.margin='8px'; if(r.error){ card.innerHTML=`<p>❌ ${r.input}<br>${r.error}</p>`; }else{ const img=new Image(); img.src='data:image/jpeg;base64,'+r.previewB64; img.style.maxWidth='280px'; card.innerHTML=`<p>✅ ${r.output}</p>`; card.appendChild(img); } $('#previews').appendChild(card); }); $('#log').textContent='完成'; $('#run').disabled=false; }); $('#gpt').addEventListener('click',async()=>{ const payload={ brand:$('#brand').value||'', material:$('#material').value||'', spec:$('#spec').value||'', shape:$('#shape').value||'', use:$('#use').value||'', openaiKey:$('#openai').value||'', rememberKey:$('#rememberKey').checked }; $('#gpt').disabled=true; const r=await window.api.generateGPT(payload); $('#gpt').disabled=false; if(!r.ok){ alert(r.error); return; } $('#titleOut').textContent=r.title||''; $('#bullets').innerHTML=''; (r.bullets||[]).forEach(b=>{ const li=document.createElement('li'); li.textContent=b; $('#bullets').appendChild(li); }); if((r.bullets||[])[0]) $('#badgeText').value=r.bullets[0]; }); $('#clear').addEventListener('click',()=>{ files=[]; $('#fileList').innerHTML=''; $('#count').textContent='0'; $('#previews').innerHTML=''; $('#log').textContent=''; }); });\n" >> renderer.js
-
-          # index.html
-          printf "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>微信图片主图优化（安装版）</title><style>body{font-family:system-ui,Arial;margin:0;padding:16px;background:#fafafa;color:#111}h1{margin:0 0 12px 0;font-size:20px}.panel{background:#fff;border:1px solid #eee;border-radius:12px;padding:12px;margin-bottom:12px}.row{display:flex;gap:8px;flex-wrap:wrap}input,select,button{padding:8px;border:1px solid #ddd;border-radius:8px}button{background:#111;color:#fff;cursor:pointer}button:disabled{opacity:.6;cursor:not-allowed}#drop{border:2px dashed #bbb;border-radius:12px;padding:28px;text-align:center;background:#fff}#drop.hover{border-color:#111}ul{margin:8px 0;padding-left:18px;max-height:140px;overflow:auto}</style></head><body><h1>微信图片 主图优化（拖拽即用）</h1><div class='panel'><div id='drop'>将微信里图片拖拽到这里，或 <input id='pick' type='file' multiple accept='image/*'></div><div>已选择 <span id='count'>0</span> 张</div><ul id='fileList'></ul><div class='row'><div><label>输出尺寸</label><br/><input id='outW' type='number' value='1200' style='width:90px'> × <input id='outH' type='number' value='1200' style='width:90px'></div><div><label>留白</label><br/><input id='pad' type='number' value='40' style='width:90px'></div><div><label>背景</label><br/><label><input id='bgKeep' type='checkbox'> 保留原背景</label> <input id='bgColor' type='color' value='#ffffff' title='自定义背景色'></div><div><label>自动对比度</label><br/><input id='autocontrast' type='checkbox' checked></div><div><label>锐化</label><br/><select id='sharpen'><option>0</option><option selected>1</option><option>2</option></select></div></div><div class='row'><label><input id='badgeEnable' type='checkbox' checked> 启用角标</label><input id='badgeText' placeholder='角标文字' value='多规格可选' style='min-width:200px'><select id='badgePos'><option value='top-left'>左上</option><option value='top-right'>右上</option><option value='bottom-left'>左下</option><option value='bottom-right'>右下</option></select><input id='badgeFont' type='number' value='44' style='width:90px'></div><div class='row'><button id='run'>开始处理</button><button id='clear' style='background:#666'>清空</button><span id='log' style='margin-left:8px'></span></div></div><div class='panel'><h3>GPT 文案（标题 + 卖点）</h3><div class='row'><input id='openai' placeholder='OpenAI API Key（可留空）' style='min-width:340px'><label><input id='rememberKey' type='checkbox'> 记住 Key</label></div><div class='row'><input id='brand' placeholder='品牌（无品牌）'><input id='material' placeholder='材质（合金）'><input id='spec' placeholder='规格（8mm）'><input id='shape' placeholder='形状（圆形）'><input id='use' placeholder='适用（耳环/项链/手链）'><button id='gpt'>生成</button></div><h4 id='titleOut'></h4><ul id='bullets'></ul><div>角标文案会自动使用第一条卖点，你也可手动改。</div></div><div id='previews'></div><script src='renderer.js'></script></body></html>\n" > index.html
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: app/package.json
-
-      - name: Install and build installer
-        working-directory: app
-        run: |
-          npm install
-          npm run dist
-
-      - name: Collect installer
-        shell: bash
-        run: |
-          set -e
-          mkdir -p out
-          cp -r app/dist/* out/
-          ls -lh out
-
-      - name: Release installer
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: "v${{ github.run_number }}"
-          name: "WeChat Image Optimizer - Installer"
-          body: "Windows .exe installer (Electron). GPT optional."
-          files: "out/*.exe"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          cat > renderer.js <<'JS'
+const $=(s)=>document.querySelector(s); let files=[];
+function getOpts(){ return { outW:parseInt($("#outW").value||"1200",10), outH:parseInt($("#outH").value||"1200",10), pad:parseInt($("#pad").value||"40",10),
+  background: $("#bgKeep").checked?"keep":($("#bgColor").value||"#FFFFFF"), autocontrast: $("#autocontrast").checked,
+  sharpen: parseInt($("#sharpen").value||"1",10),
+  badge:{ enable:$("#badgeEnable").checked, text:$("#badgeText").value||"", position:$("#badgePos").value||"top-left", fontSize:parseInt($("#badgeFont").value||"44",10), fill:"#FFFF00", textColor:"#141414" } }; }
+function addFiles(list){ for(const f of list){ if(/\.(png|jpe?g|webp|gif|bmp|tiff)$/i.test(f.path||f.name)){ files.push(f.path||f.name); const li=document.createElement("li"); li.textContent=f.path||f.name; $("#fileList").appendChild(li); } } $("#count").textContent=files.length; }
+window.addEventListener("DOMContentLoaded",()=>{
+  const drop=$("#drop"); drop.addEventListener("dragover",e=>{e.preventDefault();drop.classList.add("hover");}); drop.addEventListener("dragleave",()=>drop.classList.remove("hover"));
+  drop.addEventListener("drop",e=>{e.preventDefault();drop.classList.remove("hover"); addFiles(e.dataTransfer.files);});
+  $("#pick").addEventListener("change",e=>addFiles(e.target.files));
+  $("#run").addEventListener("click",async()=>{ if(!files.length){alert("请先拖入或选择图片");return;} $("#run").disabled=true; $("#log").textContent="处理中...";
+    const res=await window.api.processImages(files,getOpts()); $("#previews").innerHTML="";
+    res.forEach(r=>{ const card=document.createElement("div"); card.style.bor
